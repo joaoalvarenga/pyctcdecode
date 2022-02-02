@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import shutil
-from typing import Any, Collection, Dict, Iterable, List, Optional, Pattern, Set, Tuple, cast
+from typing import Any, Collection, Dict, Iterable, List, Optional, Pattern, Set, Tuple, cast, Union
 
 import numpy as np  # type: ignore
 from pygtrie import CharTrie  # type: ignore
@@ -22,7 +22,6 @@ from .constants import (
     LOG_BASE_CHANGE_FACTOR,
 )
 
-
 logger = logging.getLogger(__name__)
 
 try:
@@ -31,6 +30,16 @@ except ImportError:
     logger.warning(
         "kenlm python bindings are not installed. Most likely you want to install it using: "
         "pip install https://github.com/kpu/kenlm/archive/master.zip"
+    )
+
+try:
+    import torch
+    from mlm.scorers import MLMScorer, MLMScorerPT, LMScorer
+    from mlm.models import get_pretrained
+except ImportError:
+    logger.warning(
+        "mlm scoring python bindings are not installed. Most likely you want to install it using: "
+        "pip install git+https://github.com/awslabs/mlm-scoring"
     )
 
 
@@ -84,10 +93,10 @@ def _get_empty_lm_state() -> "kenlm.State":
 
 class HotwordScorer:
     def __init__(
-        self,
-        match_ptn: Pattern[str],
-        char_trie: CharTrie,
-        weight: float = DEFAULT_HOTWORD_WEIGHT,
+            self,
+            match_ptn: Pattern[str],
+            char_trie: CharTrie,
+            weight: float = DEFAULT_HOTWORD_WEIGHT,
     ) -> None:
         """Scorer for hotwords if provided.
 
@@ -121,7 +130,7 @@ class HotwordScorer:
 
     @classmethod
     def build_scorer(
-        cls, hotwords: Optional[Iterable[str]] = None, weight: float = DEFAULT_HOTWORD_WEIGHT
+            cls, hotwords: Optional[Iterable[str]] = None, weight: float = DEFAULT_HOTWORD_WEIGHT
     ) -> "HotwordScorer":
         """Use hotword list to create regex pattern and character trie for scoring."""
         # make sure we get an iterable
@@ -166,7 +175,7 @@ class AbstractLanguageModel(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def get_start_state(self) -> List["kenlm.State"]:
+    def get_start_state(self) -> Union[List["kenlm.State"], List[List[str]]]:
         """Get initial lm state."""
         raise NotImplementedError()
 
@@ -177,7 +186,7 @@ class AbstractLanguageModel(abc.ABC):
 
     @abc.abstractmethod
     def score(
-        self, prev_state: "kenlm.State", word: str, is_last_word: bool = False
+            self, prev_state: "kenlm.State", word: str, is_last_word: bool = False
     ) -> Tuple[float, "kenlm.State"]:
         """Score word conditional on previous lm state."""
         raise NotImplementedError()
@@ -193,6 +202,42 @@ class AbstractLanguageModel(abc.ABC):
         raise NotImplementedError()
 
 
+class MLMLanguageModel(AbstractLanguageModel):
+
+    def __init__(self,
+                 model_name: str,
+                 alpha: float = DEFAULT_ALPHA,
+                 beta: float = DEFAULT_BETA):
+        ctxs = [None]
+        model, vocab, tokenizer = get_pretrained([], model_name)
+        self.scorer = MLMScorerPT(model, vocab, tokenizer, ctxs, eos=True)
+        self.alpha = alpha
+        self.beta = beta
+
+    @property
+    def order(self) -> int:
+        return 1
+
+    def get_start_state(self) -> List[str]:
+        return []
+
+    def score_partial_token(self, partial_token: str) -> float:
+        return .0
+
+    def score(self, prev_state: List[str], word: str, is_last_word: bool = False) -> Tuple[float, List[str]]:
+        end_state = prev_state + [word]
+        lm_score = self.scorer.score_sentences([' '.join(end_state)])[0]
+        lm_score = self.alpha * lm_score * LOG_BASE_CHANGE_FACTOR + self.beta
+        return lm_score, end_state
+
+    def save_to_dir(self, filepath: str) -> None:
+        pass
+
+    @classmethod
+    def load_from_dir(cls, filepath: str) -> "AbstractLanguageModel":
+        pass
+
+
 class LanguageModel(AbstractLanguageModel):
     # serializatoin constants
     # json attrs will get serialized into a single json file
@@ -201,13 +246,13 @@ class LanguageModel(AbstractLanguageModel):
     _UNIGRAMS_SERIALIZED_FILENAME = "unigrams.txt"
 
     def __init__(
-        self,
-        kenlm_model: "kenlm.Model",
-        unigrams: Optional[Collection[str]] = None,
-        alpha: float = DEFAULT_ALPHA,
-        beta: float = DEFAULT_BETA,
-        unk_score_offset: float = DEFAULT_UNK_LOGP_OFFSET,
-        score_boundary: bool = DEFAULT_SCORE_LM_BOUNDARY,
+            self,
+            kenlm_model: "kenlm.Model",
+            unigrams: Optional[Collection[str]] = None,
+            alpha: float = DEFAULT_ALPHA,
+            beta: float = DEFAULT_BETA,
+            unk_score_offset: float = DEFAULT_UNK_LOGP_OFFSET,
+            score_boundary: bool = DEFAULT_SCORE_LM_BOUNDARY,
     ) -> None:
         """Language model container class to consolidate functionality.
 
@@ -270,16 +315,16 @@ class LanguageModel(AbstractLanguageModel):
         return unk_score
 
     def score(
-        self, prev_state: "kenlm.State", word: str, is_last_word: bool = False
+            self, prev_state: "kenlm.State", word: str, is_last_word: bool = False
     ) -> Tuple[float, "kenlm.State"]:
         """Score word conditional on start state."""
         end_state = _get_empty_lm_state()
         lm_score = self._kenlm_model.BaseScore(prev_state, word, end_state)
         # override UNK prob. use unigram set if we have because it's faster
         if (
-            len(self._unigram_set) > 0
-            and word not in self._unigram_set
-            or word not in self._kenlm_model
+                len(self._unigram_set) > 0
+                and word not in self._unigram_set
+                or word not in self._kenlm_model
         ):
             lm_score += self.unk_score_offset
         # add end of sentence context if needed
@@ -407,7 +452,7 @@ class MultiLanguageModel(AbstractLanguageModel):
         )
 
     def score(
-        self, prev_state: List["kenlm.State"], word: str, is_last_word: bool = False
+            self, prev_state: List["kenlm.State"], word: str, is_last_word: bool = False
     ) -> Tuple[float, List["kenlm.State"]]:
         """Score word conditional on previous lm state."""
         score = 0.0

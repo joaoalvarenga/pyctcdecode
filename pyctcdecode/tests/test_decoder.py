@@ -18,7 +18,7 @@ from ..decoder import (
     _prune_history,
     _sort_and_trim_beams,
     _sum_log_scores,
-    build_ctcdecoder,
+    build_ctcdecoder, build_ctcdecoder_with_mlm,
 )
 from ..language_model import LanguageModel, MultiLanguageModel
 from .helpers import TempfileTestCase
@@ -551,6 +551,16 @@ class TestDecoder(unittest.TestCase):
             unk_score_offset=unk_score_offset,
             lm_score_boundary=lm_score_boundary,
         )
+
+    def test_mlm(self):
+        decoder = build_ctcdecoder_with_mlm(SAMPLE_LABELS, 'bert-base-uncased')
+        text = decoder.decode(TEST_LOGITS)
+        self.assertEqual(text, "bugs bunny")
+        text = _greedy_decode(TEST_LOGITS, decoder._alphabet)  # pylint: disable=W0212
+        self.assertEqual(text, "bunny bunny")
+        # setting a token threshold higher than one will force only argmax characters
+        text = decoder.decode(TEST_LOGITS, token_min_logp=0.0)
+        self.assertEqual(text, "bunny bunny")
 
 
 class TestSerialization(TempfileTestCase):

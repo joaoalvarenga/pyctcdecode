@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 import kenlm
 from pygtrie import CharTrie
 
-from pyctcdecode.language_model import HotwordScorer, LanguageModel, MultiLanguageModel
+from pyctcdecode.language_model import HotwordScorer, LanguageModel, MultiLanguageModel, MLMLanguageModel
 from pyctcdecode.tests.helpers import TempfileTestCase
 
 
@@ -198,3 +198,15 @@ class TestLanguageModelSerialization(TempfileTestCase):
         self.assertEqual(lm._unigram_set, new_lm2._unigram_set)  # pylint: disable=protected-access
         self.assertEqual(lm.alpha, new_lm2.alpha)
         self.assertEqual(lm.beta, new_lm2.beta)
+
+
+class TestMLMLanguageModel(unittest.TestCase):
+    def test_lm(self):
+        lm = MLMLanguageModel('neuralmind/bert-base-portuguese-cased')
+        print(lm.score(['oi', 'tudo'], 'bem'))
+
+        model = kenlm.Model('/home/joao/Documentos/video_tool/models/pt-BR.word.3-gram.binary')
+        lm = LanguageModel(model)
+        score, state = lm.score(lm.get_start_state(), 'oi')
+        score, state = lm.score(state, 'tudo')
+        print(lm.score(state, 'bem'))

@@ -28,7 +28,7 @@ from .language_model import (
     AbstractLanguageModel,
     HotwordScorer,
     LanguageModel,
-    load_unigram_set_from_arpa,
+    load_unigram_set_from_arpa, MLMLanguageModel,
 )
 
 
@@ -826,4 +826,15 @@ def build_ctcdecoder(
         )
     else:
         language_model = None
+    return BeamSearchDecoderCTC(alphabet, language_model)
+
+
+def build_ctcdecoder_with_mlm(
+    labels: List[str],
+    mlm_model_name: str,
+    alpha: float = DEFAULT_ALPHA,
+    beta: float = DEFAULT_BETA
+) -> BeamSearchDecoderCTC:
+    alphabet = Alphabet.build_alphabet(labels)
+    language_model = MLMLanguageModel(mlm_model_name, alpha, beta)
     return BeamSearchDecoderCTC(alphabet, language_model)
